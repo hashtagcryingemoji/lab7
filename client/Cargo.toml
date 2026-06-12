@@ -1,0 +1,9 @@
+[package]
+name = "lab7_client"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+lab7_shared = { path = "../shared" }
+tokio.workspace = true

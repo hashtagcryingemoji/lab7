@@ -1,2 +1,0 @@
-class RestoreConnectionSignal: RuntimeException("Переподключение...") {
-}
