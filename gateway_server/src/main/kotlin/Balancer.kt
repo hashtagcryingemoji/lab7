@@ -1,70 +1,94 @@
 import java.net.InetSocketAddress
 import java.nio.channels.SocketChannel
 
+data class Node(
+    val host: String,
+    val port: Int,
+)
+
 class Balancer {
 
-    var availableServers: ArrayList<SocketChannel> = ArrayList()
-    var counter = 0
+    private val availableServers =
+        mutableListOf<Node>()
 
-    fun handle(request: Request): Response {
-        when (request) {
+    private var counter = 0
+
+    fun handle(
+        request: Request
+    ): Response {
+
+        return when (request) {
+
             is Request.HiBalancer -> {
-                registerServer(request.host, request.port)
-                return Response.Pong
+
+                registerServer(
+                    request.host,
+                    request.port
+                )
+
+                Response.Pong
             }
 
-            else -> return roundRobin(request)
+            else -> {
+                proxyRequest(request)
+            }
         }
     }
 
-    private fun registerServer(host: String, port: Int) {
-        availableServers.add(
-            SocketChannel.open(
-                InetSocketAddress(
-                    host,
-                    port,
-                )
-            )
-        )
+    private fun registerServer(
+        host: String,
+        port: Int
+    ) {
+
+        val exists = availableServers.any {
+                it.host == host &&
+                        it.port == port
+            }
+
+        if (!exists) {
+
+            availableServers.add(Node(host, port))
+
+            println("Registered server $host:$port")
+        }
     }
 
-    fun roundRobin(request: Request): Response {
-        if (request is Request.HiBalancer) {
-            registerServer(request.host, request.port)
-            return Response.Pong
-        }
+    private fun proxyRequest(
+        request: Request
+    ): Response {
 
-        val channel = try {
-            getNextServer()
-        } catch (_: IllegalStateException) {
-            return Response.Error("нет вставших серверов(")
-        }
-
-        channel.read()
-
-        return channel.read()!!
-    }
-
-    private fun getNextServer(): GatewayToServersChannel {
         if (availableServers.isEmpty()) {
-            throw IllegalStateException()
+            return Response.Error("Нет серверов")
         }
 
-        val index = counter % availableServers.size
-
-        val candidate = availableServers[index]
-
-        val channel = GatewayToServersChannel(candidate)
-
-        channel.write(Request.Ping)
-
-        if (channel.read() !is Response.Pong) {
-            availableServers.drop(counter)
-            return getNextServer()
-        }
+        val node =
+            availableServers[counter % availableServers.size]
 
         counter++
 
-        return channel
+        return try {
+
+            SocketChannel.open().use { socket ->
+
+                socket.connect(
+                    InetSocketAddress(
+                        node.host,
+                        node.port
+                    )
+                )
+
+                val io = GatewayToServersChannel(socket)
+
+                io.write(request)
+
+                io.read()
+            }
+
+        } catch (e: Exception) {
+
+            e.printStackTrace()
+
+            Response.Error("Server unavailable")
+        }
     }
 }

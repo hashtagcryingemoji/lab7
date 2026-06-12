@@ -5,108 +5,232 @@ import java.net.InetSocketAddress
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
-import kotlin.text.isBlank
-import kotlin.text.split
 
 open class GatewayContainer {
-    val balancer = Balancer()
-    var logger = logger()
-    var serverPort = ""
-    var hostname = ""
+
+    private val balancer = Balancer()
+
+    private val logger = logger()
+
+    private var serverPort = ""
+
+    private var hostname = ""
+
     init {
-        val env = PropertiesParser.getPropertiesFromFile(".env")
-        serverPort = env["GW_PORT"] ?: throw Error("server port should be specified in env")
-        hostname = env["GW_HOST"] ?: throw Error("hostname should be specified in env")
+
+        val env =
+            PropertiesParser.getPropertiesFromFile(".env")
+
+        serverPort =
+            env["GW_PORT"]
+                ?: error("check for GW_PORT in .env")
+
+        hostname =
+            env["GW_HOST"]
+                ?: error("check for GW_HOST in .env")
     }
 
     fun up() {
+
         try {
-            val selector = Selector.open()
-            val serverSocket = ServerSocketChannel.open()
+
+            val selector =
+                Selector.open()
+
+            val serverSocket =
+                ServerSocketChannel.open()
+
+            serverSocket.configureBlocking(false)
+
             serverSocket.bind(
                 InetSocketAddress(
                     hostname,
-                    serverPort.toIntOrNull() ?: throw Error("check for server port format in env file")
+                    serverPort.toInt()
                 )
             )
-            serverSocket.configureBlocking(false)
-            serverSocket.register(selector, SelectionKey.OP_ACCEPT)
 
-            println("Gateway started at 127.0.0.1:$serverPort")
+            serverSocket.register(
+                selector,
+                SelectionKey.OP_ACCEPT
+            )
+
+            println(
+                "Gateway started at $hostname:$serverPort"
+            )
+
             while (true) {
+
                 processInput()
-                selector.selectNow()
-                val selectionIterator = selector.selectedKeys().iterator()
-                while (selectionIterator.hasNext()) {
-                    val key = selectionIterator.next()
-                    logger.info { key.toString() }
-                    selectionIterator.remove()
 
-                    if (!key.isValid) continue
+                selector.select()
 
-                    if (key.isAcceptable) {
-                        val client = serverSocket.accept()
-                        logger.info { client.toString() }
-                        client.configureBlocking(false)
+                val iterator =
+                    selector.selectedKeys().iterator()
 
-                        val io = ClientsToGatewayChannel(client)
-                        client.register(selector, SelectionKey.OP_READ, io)
+                while (iterator.hasNext()) {
 
-                        println("Client connected: ${client.remoteAddress}")
+                    val key = iterator.next()
+
+                    iterator.remove()
+
+                    if (!key.isValid) {
+                        continue
                     }
 
-                    if (key.isReadable) {
+                    try {
 
-                        val io = key.attachment() as ClientsToGatewayChannel
+                        when {
 
-                        try {
-
-                            val request = io.read()
-                            logger.info { request.toString() }
-                            request?.let {
-                                println("Получен запрос: $request")
-                                val response = balancer.handle(request)
-                                logger.info { response }
-                                try {
-                                    io.write(response)
-                                } catch (e: Exception) {
-                                    logger.warn { e.message ?: "" }
-                                    e.printStackTrace()
-                                }
+                            key.isAcceptable -> {
+                                onAccept(
+                                    selector,
+                                    serverSocket
+                                )
                             }
-                        } catch (e: Exception) {
-                            logger.info { e.message }
-                            println("Клиент отключился или произошла ошибка")
-                            key.channel().close()
-                            key.cancel()
+
+                            key.isReadable -> {
+                                onReadable(key)
+                            }
+
+                            key.isWritable -> {
+                                onWritable(key)
+                            }
                         }
+
+                    } catch (e: Exception) {
+
+                        e.printStackTrace()
+
+                        closeKey(key)
                     }
                 }
             }
+
         } catch (_: ExitSignal) {
-            println("Сервер выключается.")
-            return
+
+            println("Gateway stopped")
         }
     }
-    fun processInput(){
-        val input: String?
-        input = if (System.`in`.available() > 0) {
-            readlnOrNull()
-        } else null
 
-        if (input != null) {
-            try {
-                if (!input.isBlank()) {
-                    val tokens = input.split(" ")
-                    val name = tokens[0]
-                    val args = tokens.drop(1)
-                    logger.log(Level.INFO, "$name, $args")
-                    if (input.equals("shutdown")) throw ExitSignal()
+    private fun onAccept(
+        selector: Selector,
+        serverSocket: ServerSocketChannel,
+    ) {
 
-                }
-            } catch (e: IllegalArgumentException) {
-                println(e.message ?: "")
+        val client =
+            serverSocket.accept()
+                ?: return
+
+        client.configureBlocking(false)
+
+        val io =
+            ClientsToGatewayChannel(client)
+
+        client.register(
+            selector,
+            SelectionKey.OP_READ,
+            io
+        )
+
+        println(
+            "Client connected: ${client.remoteAddress}"
+        )
+    }
+
+    private fun onReadable(
+        key: SelectionKey,
+    ) {
+        val io =
+            key.attachment()
+                    as ClientsToGatewayChannel
+
+        val request =
+            io.readRequestIfReady()
+                ?: return
+
+        val response =
+            balancer.handle(request)
+
+        io.prepareResponse(response)
+
+        key.interestOps(
+            SelectionKey.OP_WRITE
+        )
+    }
+
+    private fun onWritable(
+        key: SelectionKey,
+    ) {
+
+        val io =
+            key.attachment()
+                    as ClientsToGatewayChannel
+
+        val done =
+            io.writeResponseIfReady()
+
+        if (!done) {
+            return
+        }
+
+        closeKey(key)
+    }
+
+    private fun closeKey(
+        key: SelectionKey,
+    ) {
+
+        try {
+
+            key.channel().close()
+
+        } catch (_: Exception) {
+        }
+
+        try {
+
+            key.cancel()
+
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun processInput() {
+
+        val input =
+            if (System.`in`.available() > 0) {
+                readlnOrNull()
+            } else {
+                null
             }
+
+        if (input.isNullOrBlank()) {
+            return
+        }
+
+        try {
+
+            val tokens =
+                input.split(" ")
+
+            val name =
+                tokens.first()
+
+            val args =
+                tokens.drop(1)
+
+            logger.log(
+                Level.INFO,
+                "$name $args"
+            )
+
+            if (name == "shutdown") {
+                throw ExitSignal()
+            }
+
+        } catch (e: Exception) {
+
+            e.printStackTrace()
         }
     }
 }

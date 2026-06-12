@@ -10,10 +10,11 @@ import util.PropertiesParser
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.SQLException
+import java.sql.Timestamp
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 class DBManager(val collectionManager: CollectionManager) {
-    var connection: Connection
     val url: String
     val user: String
     val password: String
@@ -24,8 +25,11 @@ class DBManager(val collectionManager: CollectionManager) {
         url = env["URL"] ?: throw Error("url for db should be specified in env")
         user = env["USER"] ?: throw Error("username for db should be specified in env")
         password = env["PASSWORD"] ?: throw Error("password for db should be specified in env")
-        connection = DriverManager.getConnection(url, user, password)
         initDate = LocalDate.now()
+    }
+
+    private fun connection(): Connection{
+        return DriverManager.getConnection(url, user, password)
     }
 
     @Synchronized
@@ -33,7 +37,7 @@ class DBManager(val collectionManager: CollectionManager) {
         val statement = "delete from organizations where name > ? and user_id = (select id from users where username = ?) returning id"
         val ids = ArrayList<Int>()
 
-        connection.prepareStatement(statement).use { sqlStatement ->
+        connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setString(2, userName)
             sqlStatement.executeQuery().use { rs ->
@@ -54,7 +58,7 @@ class DBManager(val collectionManager: CollectionManager) {
         val statement = "delete from organizations where name < ? and user_id = (select id from users where username = ?) returning id"
         val ids = ArrayList<Int>()
 
-        connection.prepareStatement(statement).use { sqlStatement ->
+        connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setString(2, userName)
             sqlStatement.executeQuery().use { rs ->
@@ -81,7 +85,7 @@ class DBManager(val collectionManager: CollectionManager) {
 
         val statement = "delete from organizations where id = ?"
 
-        connection.prepareStatement(statement).use { sqlStatement ->
+        connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setInt(1, id)
             sqlStatement.executeUpdate()
         }
@@ -103,7 +107,7 @@ class DBManager(val collectionManager: CollectionManager) {
                 "type = ?, street = ?, zip = ? " +
                 "where id = ?"
 
-        connection.prepareStatement(statement).use { sqlStatement ->
+        connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setFloat(2, organization.coordinates.x)
             sqlStatement.setFloat(3, organization.coordinates.y)
@@ -136,7 +140,7 @@ class DBManager(val collectionManager: CollectionManager) {
         returning id
     """.trimIndent()
 
-        val id = connection.prepareStatement(statement).use { sqlStatement ->
+        val id = connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setFloat(2, organization.coordinates.x)
             sqlStatement.setFloat(3, organization.coordinates.y)
@@ -172,7 +176,7 @@ class DBManager(val collectionManager: CollectionManager) {
         SELECT id, name, x, y, creation_date, turnover, full_name, employees_count, type, street, zip 
         FROM organizations
     """.trimIndent()
-        connection.prepareStatement(query).use { stmt ->
+        connection().prepareStatement(query).use { stmt ->
             stmt.executeQuery().use { rs ->
                 while (rs.next()) {
 
@@ -214,7 +218,7 @@ class DBManager(val collectionManager: CollectionManager) {
     """.trimIndent()
 
         try {
-            connection.prepareStatement(statement).use { sqlStatement ->
+            connection().prepareStatement(statement).use { sqlStatement ->
                 sqlStatement.setInt(1, id)
                 sqlStatement.setString(2, userName)
 
@@ -279,7 +283,7 @@ class DBManager(val collectionManager: CollectionManager) {
     """.trimIndent()
 
         return try {
-            connection.prepareStatement(sql).use { statement ->
+            connection().prepareStatement(sql).use { statement ->
                 statement.setString(1, userName)
 
                 statement.executeQuery().use { resultSet ->
@@ -310,6 +314,72 @@ class DBManager(val collectionManager: CollectionManager) {
                 success = false,
                 info = e.message ?: "Ошибка при входе"
             )
+        }
+    }
+
+    @Synchronized
+    fun createSession(
+        token: String,
+        username: String,
+        expiresAt: LocalDateTime
+    ) {
+
+        val sql = """
+        insert into sessions (
+            token,
+            username,
+            expires_at
+        )
+        values (?, ?, ?)
+    """.trimIndent()
+
+        connection().prepareStatement(sql).use { statement ->
+
+            statement.setString(1, token)
+
+            statement.setString(2, username)
+
+            statement.setTimestamp(
+                3,
+                Timestamp.valueOf(expiresAt)
+            )
+
+            statement.executeUpdate()
+        }
+    }
+
+    @Synchronized
+    fun validateToken(
+        token: String
+    ): String? {
+
+        val sql = """
+        update sessions
+        set expires_at = ?
+        where token = ?
+        and expires_at > now()
+        returning username
+    """.trimIndent()
+
+        connection().prepareStatement(sql).use { statement ->
+
+            statement.setTimestamp(
+                1,
+                Timestamp.valueOf(
+                    LocalDateTime.now().plusMinutes(15)
+                )
+            )
+
+            statement.setString(2, token)
+
+            statement.executeQuery().use { rs ->
+
+                if (!rs.next()) {
+                    return null
+                }
+
+                return rs.getString("username")
+            }
         }
     }
 }

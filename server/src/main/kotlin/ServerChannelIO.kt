@@ -39,7 +39,7 @@ class ServerChannelIO(
     }
 
     fun write(message: Response) {
-        val json = Json.encodeToString(message)
+        val json = Json.encodeToString<Response>(message)
         val bodyBytes = json.toByteArray(Charsets.UTF_8)
 
         val writeBuffer = ByteBuffer.allocate(4 + bodyBytes.size)

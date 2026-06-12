@@ -19,8 +19,8 @@ open class ClientContainer {
     lateinit var userToken: String
     init {
         val env = PropertiesParser.getPropertiesFromFile(".env")
-        serverPort = env["SERVER_PORT"] ?: throw Error("server port should be specified in env")
-        hostname = env["HOST_NAME"] ?: throw Error("hostname should be specified in env")
+        serverPort = env["GW_PORT"] ?: throw Error("server port should be specified in env")
+        hostname = env["GW_HOST"] ?: throw Error("hostname should be specified in env")
     }
 
     fun requestReg(): Pair<String, String> {
@@ -58,7 +58,7 @@ open class ClientContainer {
             val user = requestReg()
             channelIO.write(Request.HandShake("${user.first} ${user.second}", type))
 
-            val handshakeResponse = channelIO.read() ?: return up()
+            val handshakeResponse = channelIO.read()
             resolver.resolve(handshakeResponse)
             //println("получен токен:$userToken")
             timeout = 5000
@@ -76,7 +76,8 @@ open class ClientContainer {
             Thread.sleep(timeout)
             if (timeout < 50000) timeout += 1000
             return up()
-        } catch (_: IOException) {
+        } catch (e: IOException) {
+            e.printStackTrace()
             IO.printLine("сервер разорвал подключение")
             return up()
         }

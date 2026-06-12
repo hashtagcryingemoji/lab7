@@ -7,38 +7,59 @@ import java.nio.channels.SocketChannel
 class GatewayToServersChannel(
     private val channel: SocketChannel,
 ) {
-    private var size = -1
     private val sizeBuffer = ByteBuffer.allocate(4)
-    private lateinit var dataBuffer: ByteBuffer
 
-    fun read(): Response? {
-        if (size == -1) {
-            val bytesRead = channel.read(sizeBuffer)
-            if (bytesRead == -1) throw IOException("Соединение с сервером разорвано")
-            if (sizeBuffer.hasRemaining()) return null
+    fun read(): Response {
 
-            sizeBuffer.flip()
-            size = sizeBuffer.int
-            sizeBuffer.clear()
+        while (sizeBuffer.hasRemaining()) {
 
-            dataBuffer = ByteBuffer.allocate(size)
+            val bytesRead =
+                channel.read(sizeBuffer)
+
+            if (bytesRead == -1) {
+                throw IOException(
+                    "Соединение с сервером разорвано"
+                )
+            }
         }
 
-        val bytesReadData = channel.read(dataBuffer)
-        if (bytesReadData == -1) throw IOException("Соединение с сервером разорвано")
+        sizeBuffer.flip()
 
-        if (dataBuffer.hasRemaining()) return null
+        val size = sizeBuffer.int
 
-        val json = String(dataBuffer.array(), Charsets.UTF_8)
-        val rpc = Json.decodeFromString<Response>(json)
+        sizeBuffer.clear()
 
-        size = -1
+        val dataBuffer =
+            ByteBuffer.allocate(size)
 
-        return rpc
+        while (dataBuffer.hasRemaining()) {
+
+            val bytesRead =
+                channel.read(dataBuffer)
+
+            if (bytesRead == -1) {
+                throw IOException(
+                    "Соединение с сервером разорвано"
+                )
+            }
+        }
+
+        dataBuffer.flip()
+
+        val bytes =
+            ByteArray(dataBuffer.remaining())
+
+        dataBuffer.get(bytes)
+
+        val json =
+            String(bytes, Charsets.UTF_8)
+
+
+        return Json.decodeFromString<Response>(json)
     }
 
     fun write(message: Request) {
-        val json = Json.encodeToString(message)
+        val json = Json.encodeToString<Request>(message)
         val bodyBytes = json.toByteArray(Charsets.UTF_8)
 
         val writeBuffer = ByteBuffer.allocate(4 + bodyBytes.size)

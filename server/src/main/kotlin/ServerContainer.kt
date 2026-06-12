@@ -7,8 +7,6 @@ import thread.RequestResolver
 import util.PropertiesParser
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
-import java.nio.channels.SelectionKey
-import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ForkJoinPool
@@ -41,11 +39,13 @@ class ServerContainer {
             balancerHost,
             balancerPort.toIntOrNull() ?: error("no")
         )
-        SocketChannel.open(address).use{ socketChannel ->
-            val json = Json.encodeToString(Request.HiBalancer(
-                hostname,
-                serverPort.toIntOrNull() ?: throw Error("check for server port format in env file")
-            ))
+        SocketChannel.open(address).use { socketChannel ->
+            val json = Json.encodeToString<Request>(
+                Request.HiBalancer(
+                    hostname,
+                    serverPort.toIntOrNull() ?: throw Error("check for server port format in env file")
+                )
+            )
             val bodyBytes = json.toByteArray(Charsets.UTF_8)
 
             val writeBuffer = ByteBuffer.allocate(4 + bodyBytes.size)
@@ -58,167 +58,91 @@ class ServerContainer {
                 if (written == -1) throw Exception("Disconnected while writing")
             }
 
+
         }
     }
 
     fun up() {
+
         try {
-            val selector = Selector.open()
-            val serverSocket = ServerSocketChannel.open()
+
+            val serverSocket =
+                ServerSocketChannel.open()
+
             serverSocket.bind(
                 InetSocketAddress(
                     hostname,
-                    serverPort.toIntOrNull() ?: throw Error("check for server port format in env file")
+                    serverPort.toIntOrNull()
+                        ?: error("bad port")
                 )
             )
-            serverSocket.configureBlocking(false)
-            serverSocket.register(selector, SelectionKey.OP_ACCEPT)
 
-            println("Server started at $hostname:$serverPort")
+            println(
+                "Server started at $hostname:$serverPort"
+            )
+
             while (true) {
-                process(selector, serverSocket)
-            }
-        } catch (_: ExitSignal) {
-            requestResolver.shutdown()
-            writePool.shutdown()
-            readPool.shutdown()
-            println("Сервер выключается.")
-            return
-        }
-    }
 
-    fun process(selector: Selector, serverSocket: ServerSocketChannel) {
-        IO.process()
-        selector.selectNow()
-        val selectionIterator = selector.selectedKeys().iterator()
-        while (selectionIterator.hasNext()) {
-            val key = selectionIterator.next()
-            logger.info { key.toString() }
-            selectionIterator.remove()
-            if (!key.isValid) continue
+                IO.process()
 
-            if (key.isAcceptable) {
-                val clientChannel = serverSocket.accept()
-                logger.info { clientChannel.toString() }
-                clientChannel.configureBlocking(false)
+                val client =
+                    serverSocket.accept()
 
-                val client = ClientState(clientChannel)
-                clientChannel.register(selector, SelectionKey.OP_READ, client)
+                println(
+                    "Client connected: ${client.remoteAddress}"
+                )
 
-                println("Client connected: ${clientChannel.remoteAddress}")
-            }
+                readPool.execute {
 
-            if (key.isReadable) {
-                val state = key.attachment() as ClientState
+                    val state =
+                        ClientState(client)
 
-                var shouldRead = false
+                    try {
 
-                state.lock.lock()
-                try {
-                    if (!state.isReading && !state.isClosed) {
-                        state.isReading = true
-                        shouldRead = true
-                    }
-                } finally {
-                    state.lock.unlock()
-                }
+                        val request =
+                            state.read() ?: error("empty request")
 
-                if (shouldRead) {
-                    readPool.execute {
+                        println(
+                            "SERVER GOT REQUEST: $request"
+                        )
+
+                        IO.write(
+                            "$request from ${client.remoteAddress}"
+                        )
+
+                        val response =
+                            dispatcher.handleRequest(request)
+
+                        println(
+                            "SERVER RESPONSE: $response"
+                        )
+
+                        state.write(response)
+
+                    } catch (e: Exception) {
+
+                        e.printStackTrace()
+
+                    } finally {
+
                         try {
-                            val request = state.read()
-                            IO.write(request.toString() + " from: " + state.channel.remoteAddress)
-                            if (request != null) {
-                                requestResolver.execute {
-                                    try {
-                                        val response = dispatcher.handleRequest(request)
-
-                                        logger.info { response }
-
-                                        submitWrite(key, state, response)
-                                    } catch (e: Exception) {
-                                        logger.warn { e.message ?: "" }
-                                        e.printStackTrace()
-                                        closeKey(key, state)
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            logger.warn { e.message ?: "" }
-                            closeKey(key, state)
-                        } finally {
-                            state.lock.lock()
-                            try {
-                                state.isReading = false
-                            } finally {
-                                state.lock.unlock()
-                            }
+                            client.close()
+                        } catch (_: Exception) {
                         }
                     }
                 }
             }
 
+        } catch (_: ExitSignal) {
+
+            requestResolver.shutdown()
+
+            writePool.shutdown()
+
+            readPool.shutdown()
+
+            println("Сервер выключается.")
         }
-    }
-
-    private fun submitWrite(
-        key: SelectionKey,
-        state: ClientState,
-        response: Response
-    ) {
-        @Suppress
-        var shouldWrite = false
-
-        state.lock.lock()
-        try {
-            if (!state.isWriting && !state.isClosed) {
-                state.isWriting = true
-                shouldWrite = true
-            }
-        } finally {
-            state.lock.unlock()
-        }
-
-        if (!shouldWrite) {
-            return
-        }
-
-        writePool.execute {
-            try {
-                state.write(response)
-            } catch (e: Exception) {
-                logger.warn { e.message ?: "" }
-                e.printStackTrace()
-                closeKey(key, state)
-            } finally {
-                state.lock.lock()
-                try {
-                    state.isWriting = false
-                } finally {
-                    state.lock.unlock()
-                }
-            }
-        }
-    }
-}
-
-private fun closeKey(key: SelectionKey, state: ClientState) {
-    state.lock.lock()
-    try {
-        if (state.isClosed) return
-        state.isClosed = true
-    } finally {
-        state.lock.unlock()
-    }
-
-    try {
-        key.cancel()
-    } catch (_: Exception) {
-    }
-
-    try {
-        key.channel().close()
-    } catch (_: Exception) {
     }
 }
 
