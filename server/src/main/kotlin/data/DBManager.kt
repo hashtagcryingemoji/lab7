@@ -1,7 +1,5 @@
 package data
 
-import application.convertOrganizationFromTransferData
-import application.CollectionManager
 import domain.Address
 import domain.Coordinates
 import domain.Organization
@@ -14,7 +12,7 @@ import java.sql.Timestamp
 import java.time.LocalDate
 import java.time.LocalDateTime
 
-class DBManager(val collectionManager: CollectionManager) {
+class DBManager {
     val url: String
     val user: String
     val password: String
@@ -33,44 +31,38 @@ class DBManager(val collectionManager: CollectionManager) {
     }
 
     @Synchronized
-    fun removeGreater(organization: OrganizationTransferData, userName: String) {
+    fun removeGreater(organization: OrganizationTransferData, userName: String): Int {
         val statement = "delete from organizations where name > ? and user_id = (select id from users where username = ?) returning id"
-        val ids = ArrayList<Int>()
 
-        connection().prepareStatement(statement).use { sqlStatement ->
+        return connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setString(2, userName)
             sqlStatement.executeQuery().use { rs ->
+                var count = 0
                 while (rs.next()) {
-                    ids.add(rs.getInt("id"))
+                    count++
                 }
 
+                count
             }
-        }
-
-        for (id in ids) {
-            collectionManager.removeById(id)
         }
     }
 
     @Synchronized
-    fun removeLower(organization: OrganizationTransferData, userName: String) {
+    fun removeLower(organization: OrganizationTransferData, userName: String): Int {
         val statement = "delete from organizations where name < ? and user_id = (select id from users where username = ?) returning id"
-        val ids = ArrayList<Int>()
 
-        connection().prepareStatement(statement).use { sqlStatement ->
+        return connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setString(2, userName)
             sqlStatement.executeQuery().use { rs ->
+                var count = 0
                 while (rs.next()) {
-                    ids.add(rs.getInt("id"))
+                    count++
                 }
 
+                count
             }
-        }
-
-        for (id in ids) {
-            collectionManager.removeById(id)
         }
     }
 
@@ -89,8 +81,6 @@ class DBManager(val collectionManager: CollectionManager) {
             sqlStatement.setInt(1, id)
             sqlStatement.executeUpdate()
         }
-
-        collectionManager.removeById(id)
     }
 
     @Synchronized
@@ -122,12 +112,14 @@ class DBManager(val collectionManager: CollectionManager) {
 
             sqlStatement.executeUpdate()
         }
-
-        collectionManager.updateById(id, organization)
     }
 
     @Synchronized
     fun add(organization: OrganizationTransferData, userName: String) {
+        if (fullNameExists(organization.fullName)) {
+            throw IllegalArgumentException("Полное имя организации не уникально.")
+        }
+
         val statement = """
         insert into organizations (
             name, x, y, creation_date, turnover, full_name,
@@ -140,7 +132,7 @@ class DBManager(val collectionManager: CollectionManager) {
         returning id
     """.trimIndent()
 
-        val id = connection().prepareStatement(statement).use { sqlStatement ->
+        connection().prepareStatement(statement).use { sqlStatement ->
             sqlStatement.setString(1, organization.name)
             sqlStatement.setFloat(2, organization.coordinates.x)
             sqlStatement.setFloat(3, organization.coordinates.y)
@@ -162,9 +154,19 @@ class DBManager(val collectionManager: CollectionManager) {
                 }
             }
         }
+    }
 
-        val org = convertOrganizationFromTransferData(id, organization)
-        collectionManager.add(org)
+    @Synchronized
+    private fun fullNameExists(fullName: String): Boolean {
+        val statement = "select exists(select 1 from organizations where full_name = ?)"
+
+        connection().prepareStatement(statement).use { sqlStatement ->
+            sqlStatement.setString(1, fullName)
+
+            sqlStatement.executeQuery().use { rs ->
+                return rs.next() && rs.getBoolean(1)
+            }
+        }
     }
 
     @Synchronized
@@ -204,6 +206,77 @@ class DBManager(val collectionManager: CollectionManager) {
         }
 
         return organizationsList
+    }
+
+    @Synchronized
+    fun getCollection(): List<Organization> =
+        downloadCollection().sortedWith(compareBy { it.name })
+
+    @Synchronized
+    fun countType(type: OrganizationType): Int {
+        val statement = "select count(*) from organizations where type = ?"
+
+        connection().prepareStatement(statement).use { sqlStatement ->
+            sqlStatement.setString(1, type.toString())
+
+            sqlStatement.executeQuery().use { rs ->
+                return if (rs.next()) rs.getInt(1) else 0
+            }
+        }
+    }
+
+    @Synchronized
+    fun sumEmployees(): Long {
+        val statement = "select coalesce(sum(employees_count), 0) from organizations"
+
+        connection().prepareStatement(statement).use { sqlStatement ->
+            sqlStatement.executeQuery().use { rs ->
+                return if (rs.next()) rs.getLong(1) else 0L
+            }
+        }
+    }
+
+    @Synchronized
+    fun countLessAddress(address: Address): Int {
+        val statement = """
+        select count(*)
+        from organizations
+        where coalesce(zip, '') < ?
+           or (coalesce(zip, '') = ? and coalesce(street, '') < ?)
+    """.trimIndent()
+
+        val zip = address.zipCode ?: ""
+        val street = address.street ?: ""
+
+        connection().prepareStatement(statement).use { sqlStatement ->
+            sqlStatement.setString(1, zip)
+            sqlStatement.setString(2, zip)
+            sqlStatement.setString(3, street)
+
+            sqlStatement.executeQuery().use { rs ->
+                return if (rs.next()) rs.getInt(1) else 0
+            }
+        }
+    }
+
+    @Synchronized
+    fun collectionInfo(): String {
+        val collection = getCollection()
+
+        if (collection.isEmpty()) {
+            return "коллекция пуста:("
+        }
+
+        val strBuilder = StringBuilder()
+        strBuilder.append("Количество элементов в коллекции: ${collection.size}\n")
+        strBuilder.append("дата создания шедевра - $initDate\n")
+        strBuilder.append("Организации в коллекции:\n")
+
+        collection.forEach {
+            strBuilder.append("${it.fullName} с id номер ${it.id}\n")
+        }
+
+        return strBuilder.toString()
     }
 
     @Synchronized

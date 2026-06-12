@@ -3,7 +3,6 @@ package commands
 import data.Result
 import ServerContainer
 import application.buildOrganization
-import application.convertOrganizationFromTransferData
 import data.OrganizationTransferData
 
 class RemoveGreater : Command {
@@ -23,12 +22,10 @@ class RemoveGreater : Command {
 
     override fun execute(context: ServerContainer, args: List<String>, userHash: String): Result {
         val dbManager = context.dBManager
-        val collectionManager = context.collectionManager
         return try {
             val org: OrganizationTransferData = buildOrganization(args)
-            val count = collectionManager.countGreater(convertOrganizationFromTransferData(0, org))
+            val count = dbManager.removeGreater(org, userHash)
 
-            dbManager.removeGreater(org, userHash)
             Result(true, "Из коллекции удалено $count элементов")
         } catch (_: Exception) {Result(false, "Возникла ошибка.")}
     }

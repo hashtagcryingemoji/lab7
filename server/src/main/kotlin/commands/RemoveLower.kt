@@ -3,7 +3,6 @@ package commands
 import data.Result
 import ServerContainer
 import application.buildOrganization
-import application.convertOrganizationFromTransferData
 import data.OrganizationTransferData
 
 class RemoveLower : Command {
@@ -23,12 +22,10 @@ class RemoveLower : Command {
 
     override fun execute(context: ServerContainer, args: List<String>, userHash: String): Result {
         val dbManager = context.dBManager
-        val collectionManager = context.collectionManager
         return try {
             val org: OrganizationTransferData = buildOrganization(args)
-            val count = collectionManager.countLower(convertOrganizationFromTransferData(0, org))
+            val count = dbManager.removeLower(org, userHash)
 
-            dbManager.removeLower(org, userHash)
             Result(true, "Из коллекции удалено $count элементов")
         } catch (e: IllegalStateException) {Result(false, e.message ?: "хз")}
         catch (_: NumberFormatException) {Result(false, "Некорректное числовое представление.")}
