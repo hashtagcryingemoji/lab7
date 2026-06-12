@@ -24,6 +24,7 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-reflect:2.0.0")
     implementation("org.apache.logging.log4j:log4j-core:2.25.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+    implementation("org.apache.kafka:kafka-clients:3.9.0")
 }
 
 application{

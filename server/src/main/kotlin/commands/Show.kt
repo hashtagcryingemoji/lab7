@@ -9,13 +9,13 @@ class Show : Command {
     override val name: String = "show"
 
     override fun execute(context: ServerContainer, args: List<String>, userHash: String): Result {
-        val collectionManager = context.collectionManager
-        return if (collectionManager.getCollection()
+        val collection = context.dBManager.getCollection()
+        return if (collection
                 .isEmpty()
         ) Result(true, "Вы еще не успели насоздавать шедевров...")
         else {
             val strBuilder = StringBuilder()
-            collectionManager.getCollection().forEach { strBuilder.append(it); strBuilder.append("\n") }
+            collection.forEach { strBuilder.append(it); strBuilder.append("\n") }
             Result(true, strBuilder.toString())
         }
     }

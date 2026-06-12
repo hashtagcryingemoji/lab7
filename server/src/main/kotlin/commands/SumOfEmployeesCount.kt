@@ -10,8 +10,7 @@ class SumOfEmployeesCount : Command {
     override val description = "Возвращает количество работяг во всей коллекции"
 
     override fun execute(context: ServerContainer, args: List<String>, userHash: String): Result {
-        val collectionManager = context.collectionManager
-        val count = collectionManager.sumEmployees()
+        val count = context.dBManager.sumEmployees()
         return Result(true, "Общее количество работяг в коллекции: $count")
     }
 }
